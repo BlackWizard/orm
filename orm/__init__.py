@@ -16,5 +16,6 @@ __all__ = [
     "DateTime",
     "JSON",
     "ForeignKey",
+    "Enum"
     "Model",
 ]
