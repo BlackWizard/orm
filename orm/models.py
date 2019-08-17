@@ -50,11 +50,13 @@ class ModelMetaclass(SchemaMetaclass):
 
 class QuerySet:
     ESCAPE_CHARACTERS = ['%', '_']
-    def __init__(self, model_cls=None, filter_clauses=None, select_related=None, limit_count=None):
+    def __init__(self, model_cls=None, filter_clauses=None, select_related=None, order_by = None, limit_count=None, offset_count=None):
         self.model_cls = model_cls
         self.filter_clauses = [] if filter_clauses is None else filter_clauses
         self._select_related = [] if select_related is None else select_related
+        self._order_by = [] if order_by is None else order_by
         self.limit_count = limit_count
+        self.offset_count = offset_count
 
     def __get__(self, instance, owner):
         return self.__class__(model_cls=owner)
@@ -89,8 +91,25 @@ class QuerySet:
                 clause = sqlalchemy.sql.and_(*self.filter_clauses)
             expr = expr.where(clause)
 
+        if self._order_by:
+            order_args = []
+            for clause in self._order_by:
+                if clause.startswith("-"):
+                    desc = True
+                    col_name = clause.lstrip("-")
+                else:
+                    desc = False
+                    col_name = clause
+
+                col = self.model_cls.__table__.columns[col_name]
+                order_args.append(col.desc() if desc else col)
+            expr = expr.order_by(*order_args)
+
         if self.limit_count:
             expr = expr.limit(self.limit_count)
+
+        if self.offset_count:
+            expr = expr.offset(self.offset_count)
 
         return expr
 
@@ -156,19 +175,20 @@ class QuerySet:
             model_cls=self.model_cls,
             filter_clauses=filter_clauses,
             select_related=select_related,
-            limit_count=self.limit_count
+            order_by=self._order_by,
+            limit_count=self.limit_count,
+            offset_count=self.offset_count,
         )
 
-    def select_related(self, related):
-        if not isinstance(related, (list, tuple)):
-            related = [related]
-
-        related = list(self._select_related) + related
+    def select_related(self, *related):
+        related = self._select_related + list(related)
         return self.__class__(
             model_cls=self.model_cls,
             filter_clauses=self.filter_clauses,
             select_related=related,
-            limit_count=self.limit_count
+            order_by=self._order_by,
+            limit_count=self.limit_count,
+            offset_count=self.offset_count,
         )
 
     async def exists(self) -> bool:
@@ -176,12 +196,35 @@ class QuerySet:
         expr = sqlalchemy.exists(expr).select()
         return await self.database.fetch_val(expr)
 
+    def order_by(self, *order_by):
+        order_by = self._order_by + list(order_by)
+        return self.__class__(
+            model_cls=self.model_cls,
+            filter_clauses=self.filter_clauses,
+            select_related=self._select_related,
+            order_by=order_by,
+            limit_count=self.limit_count,
+            offset_count=self.offset_count,
+        )
+
     def limit(self, limit_count: int):
         return self.__class__(
             model_cls=self.model_cls,
             filter_clauses=self.filter_clauses,
             select_related=self._select_related,
-            limit_count=limit_count
+            order_by=self._order_by,
+            limit_count=limit_count,
+            offset_count=self.offset_count,
+        )
+
+    def offset(self, offset_count: int):
+        return self.__class__(
+            model_cls=self.model_cls,
+            filter_clauses=self.filter_clauses,
+            select_related=self._select_related,
+            order_by=self._order_by,
+            limit_count=self.limit_count,
+            offset_count=offset_count,
         )
 
     async def count(self) -> int:
