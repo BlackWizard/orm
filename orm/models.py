@@ -77,8 +77,9 @@ class QuerySet:
             model_cls = self.model_cls
             select_from = self.table
             for part in item.split("__"):
+                isouter = model_cls.fields[part].allow_null
                 model_cls = model_cls.fields[part].to
-                select_from = sqlalchemy.sql.join(select_from, model_cls.__table__)
+                select_from = sqlalchemy.sql.join(select_from, model_cls.__table__, isouter=isouter)
                 tables.append(model_cls.__table__)
 
         expr = sqlalchemy.sql.select(tables)
