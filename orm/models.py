@@ -102,8 +102,23 @@ class QuerySet:
                     desc = False
                     col_name = clause
 
+                nulls_first = False
+                nulls_last = False
+                if clause.endswith("__nulls_first"):
+                    col_name = col_name.replace("__nulls_first", "")
+                    nulls_first = True
+                elif clause.endswith("__nulls_last"):
+                    col_name = col_name.replace("__nulls_last", "")
+                    nulls_last = True
+
                 col = self.model_cls.__table__.columns[col_name]
-                order_args.append(col.desc() if desc else col)
+                if desc:
+                    col = col.desc()
+                if nulls_first:
+                    col = col.nullsfirst()
+                elif nulls_last:
+                    col = col.nullslast()
+                order_args.append(col)
             expr = expr.order_by(*order_args)
 
         if self.limit_count:
