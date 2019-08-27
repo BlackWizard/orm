@@ -50,11 +50,12 @@ class ModelMetaclass(SchemaMetaclass):
 
 class QuerySet:
     ESCAPE_CHARACTERS = ['%', '_']
-    def __init__(self, model_cls=None, filter_clauses=None, select_related=None, order_by = None, limit_count=None, offset_count=None):
+    def __init__(self, model_cls=None, filter_clauses=None, select_related=None, order_by = None, limit_count=None, offset_count=None, distinct=None):
         self.model_cls = model_cls
         self.filter_clauses = [] if filter_clauses is None else filter_clauses
         self._select_related = [] if select_related is None else select_related
         self._order_by = [] if order_by is None else order_by
+        self._distinct= [] if distinct is None else distinct
         self.limit_count = limit_count
         self.offset_count = offset_count
 
@@ -110,7 +111,7 @@ class QuerySet:
                 elif clause.endswith("__nulls_last"):
                     col_name = col_name.replace("__nulls_last", "")
                     nulls_last = True
-
+                
                 col = self.model_cls.__table__.columns[col_name]
                 if desc:
                     col = col.desc()
@@ -120,6 +121,9 @@ class QuerySet:
                     col = col.nullslast()
                 order_args.append(col)
             expr = expr.order_by(*order_args)
+
+        if self._distinct:
+            expr = expr.distinct(sqlalchemy.sql.and_(*([self.model_cls.__table__.columns[c] for c in self._distinct])))
 
         if self.limit_count:
             expr = expr.limit(self.limit_count)
@@ -192,6 +196,7 @@ class QuerySet:
             filter_clauses=filter_clauses,
             select_related=select_related,
             order_by=self._order_by,
+            distinct=self._distinct,
             limit_count=self.limit_count,
             offset_count=self.offset_count,
         )
@@ -203,6 +208,7 @@ class QuerySet:
             filter_clauses=self.filter_clauses,
             select_related=related,
             order_by=self._order_by,
+            distinct=self._distinct,
             limit_count=self.limit_count,
             offset_count=self.offset_count,
         )
@@ -219,6 +225,19 @@ class QuerySet:
             filter_clauses=self.filter_clauses,
             select_related=self._select_related,
             order_by=order_by,
+            distinct=self._distinct,
+            limit_count=self.limit_count,
+            offset_count=self.offset_count,
+        )
+
+    def distinct(self, *distinct):
+        distinct = self._distinct + list(distinct)
+        return self.__class__(
+            model_cls=self.model_cls,
+            filter_clauses=self.filter_clauses,
+            select_related=self._select_related,
+            order_by=self._order_by,
+            distinct=distinct,
             limit_count=self.limit_count,
             offset_count=self.offset_count,
         )
@@ -229,6 +248,7 @@ class QuerySet:
             filter_clauses=self.filter_clauses,
             select_related=self._select_related,
             order_by=self._order_by,
+            distinct=self._distinct,
             limit_count=limit_count,
             offset_count=self.offset_count,
         )
@@ -239,13 +259,15 @@ class QuerySet:
             filter_clauses=self.filter_clauses,
             select_related=self._select_related,
             order_by=self._order_by,
+            distinct=self._distinct,
             limit_count=self.limit_count,
             offset_count=offset_count,
         )
 
     async def count(self) -> int:
         expr = self.build_select_expression()
-        expr = sqlalchemy.func.count().select().select_from(expr)
+        #expr = sqlalchemy.func.count().select().select_from(expr)
+        expr = expr.with_only_columns([sqlalchemy.func.count()]).order_by(None)
         return await self.database.fetch_val(expr)
 
     async def all(self, **kwargs):
