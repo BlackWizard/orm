@@ -1,6 +1,8 @@
 import typing
 
 import sqlalchemy
+import sqlalchemy.orm
+
 import typesystem
 from typesystem.schemas import SchemaMetaclass
 
@@ -18,6 +20,8 @@ FILTER_OPERATORS = {
     "gte": "__ge__",
     "lt": "__lt__",
     "lte": "__le__",
+    "search": "@@",
+    "rank": "tsrank",
 }
 
 
@@ -41,6 +45,9 @@ class ModelMetaclass(SchemaMetaclass):
             if field.primary_key:
                 pkname = name
             columns.append(field.get_column(name))
+
+        if "__constraints__" in attrs:
+            columns.extend(attrs["__constraints__"])
 
         new_model.__table__ = sqlalchemy.Table(tablename, metadata, *columns)
         new_model.__pkname__ = pkname
@@ -76,7 +83,6 @@ class QuerySet:
 
         for item in self._select_related:
             model_cls = self.model_cls
-            select_from = self.table
             for part in item.split("__"):
                 isouter = model_cls.fields[part].allow_null
                 model_cls = model_cls.fields[part].to
@@ -112,14 +118,17 @@ class QuerySet:
                     col_name = col_name.replace("__nulls_last", "")
                     nulls_last = True
                 
-                col = self.model_cls.__table__.columns[col_name]
-                if desc:
-                    col = col.desc()
-                if nulls_first:
-                    col = col.nullsfirst()
-                elif nulls_last:
-                    col = col.nullslast()
-                order_args.append(col)
+                col = self.model_cls.__table__.columns.get(col_name)
+                if col is not None:
+                    if desc:
+                        col = col.desc()
+                    if nulls_first:
+                        col = col.nullsfirst()
+                    elif nulls_last:
+                        col = col.nullslast()
+                    order_args.append(col)
+                else:
+                    order_args.append(col_name)
             expr = expr.order_by(*order_args)
 
         if self._distinct:
@@ -133,10 +142,11 @@ class QuerySet:
 
         return expr
 
-    def filter(self, **kwargs):
+    def filter(self, or_=False, **kwargs):
         filter_clauses = self.filter_clauses
         select_related = list(self._select_related)
 
+        clauses = []
         for key, value in kwargs.items():
             if "__" in key:
                 parts = key.split("__")
@@ -187,9 +197,19 @@ class QuerySet:
             if isinstance(value, Model):
                 value = value.pk
 
-            clause = getattr(column, op_attr)(value)
-            clause.modifiers['escape'] = '\\' if has_escaped_character else None
-            filter_clauses.append(clause)
+            if op_attr == '@@':
+                clause = column.op('@@')(sqlalchemy.func.plainto_tsquery('russian', value))
+            elif op_attr == 'tsrank':
+                clause = sqlalchemy.func.ts_rank(column, sqlalchemy.func.plainto_tsquery('russian', value)).label('tsrank')
+            else:
+                clause = getattr(column, op_attr)(value)
+                clause.modifiers['escape'] = '\\' if has_escaped_character else None
+            clauses.append(clause)
+
+        if or_ is True:
+            filter_clauses.append(sqlalchemy.sql.or_(*clauses))
+        else:
+            filter_clauses.extend(clauses)
 
         return self.__class__(
             model_cls=self.model_cls,
@@ -269,6 +289,21 @@ class QuerySet:
         #expr = sqlalchemy.func.count().select().select_from(expr)
         expr = expr.with_only_columns([sqlalchemy.func.count()]).order_by(None)
         return await self.database.fetch_val(expr)
+
+    async def only(self, *fields):
+        expr = self.build_select_expression()
+        columns = []
+        for field in fields:
+            column = getattr(self.table.c, field)
+            columns.append(column)
+        expr = expr.with_only_columns(columns)
+
+        rows = await self.database.fetch_all(expr)
+        return [
+            self.model_cls(dict([(f, row[f]) for f in fields]))
+            for row in rows
+        ]
+
 
     async def all(self, **kwargs):
         if kwargs:
